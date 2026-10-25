@@ -6,6 +6,7 @@
 
 import ast
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -31,7 +32,16 @@ def value(node):
 
 
 apps = {}
-for fam in sorted((FW / "applications").rglob("application.fam")):
+def find_fams(root: Path):
+    """application.fam во всём дереве; ссылки на каталоги раскрываются (оверлей исходников для WASM)."""
+    found = []
+    for directory, _, files in os.walk(root, followlinks=True):
+        if "application.fam" in files:
+            found.append(Path(directory) / "application.fam")
+    return sorted(found)
+
+
+for fam in find_fams(FW / "applications"):
     for node in ast.walk(ast.parse(fam.read_text())):
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "App":
             app = {k.arg: value(k.value) for k in node.keywords}

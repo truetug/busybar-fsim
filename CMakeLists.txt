@@ -12,7 +12,10 @@ set(TARGET_DIR ${CMAKE_SOURCE_DIR}/targets/fsim)
 
 set(CMAKE_C_STANDARD 23) # как прошивка: gnu23 (разделители разрядов и т.п.)
 set(CMAKE_C_EXTENSIONS ON)
-add_compile_options(-g -O0 -Wall -Wno-unused-parameter -fno-strict-aliasing
+# Оптимизация: по умолчанию как раньше; для wasm — -DFSIM_OPT="-O2 -g0"
+set(FSIM_OPT "-O0" CACHE STRING "Флаги оптимизации")
+separate_arguments(FSIM_OPT_LIST UNIX_COMMAND "${FSIM_OPT}")
+add_compile_options(-g ${FSIM_OPT_LIST} -Wall -Wno-unused-parameter -fno-strict-aliasing
                     "$<$<COMPILE_LANGUAGE:C>:SHELL:-include ${TARGET_DIR}/include/fsim_preinclude.h>")
 add_compile_definitions(_GNU_SOURCE FURI_DEBUG HAVE_UNISTD_H=1 HAVE_STDARG_H=1)
 
@@ -243,7 +246,7 @@ add_executable(fsim
     ${TARGET_DIR}/src/fsim_web_stubs.c
     ${TARGET_DIR}/src/fsim_check.c
     ${TARGET_DIR}/src/fsim_libc.c
-    ${TARGET_DIR}/src/fsim_heap.S)
+    $<$<NOT:$<BOOL:${EMSCRIPTEN}>>:${TARGET_DIR}/src/fsim_heap.S>)
 
 target_include_directories(fsim PRIVATE
     ${TARGET_DIR}/include
@@ -293,9 +296,21 @@ target_include_directories(fsim PRIVATE
     ${FW_DIR}/lib/toolbox)
 
 # Без PIE адреса из backtrace() при падении сразу годятся для addr2line (gdb в эмуляции amd64 не работает)
-set_target_properties(fsim PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-target_link_options(fsim PRIVATE -no-pie -Wl,--wrap=pthread_sigmask -Wl,--wrap=poll -Wl,--wrap=connect)
-target_link_libraries(fsim PRIVATE pthread m)
+if(EMSCRIPTEN)
+    # WASM (оценка FS-3): потоки через Web Workers и SharedArrayBuffer — странице нужны COOP / COEP
+    target_compile_options(fsim PRIVATE -pthread)
+    target_link_options(fsim PRIVATE -pthread -sPROXY_TO_PTHREAD -sEXIT_RUNTIME=0 -sINITIAL_MEMORY=160MB
+        -sSTACK_SIZE=1MB -sERROR_ON_UNDEFINED_SYMBOLS=0 -sWARN_ON_UNDEFINED_SYMBOLS=0 -sEXPORTED_RUNTIME_METHODS=ENV -sPTHREAD_POOL_SIZE=24 -sFORCE_FILESYSTEM=1 -sNO_DISABLE_EXCEPTION_CATCHING=0)
+    if(FSIM_WASM_NODERAWFS)  # только для замеров под node: образ SD читается прямо с диска хоста
+        target_link_options(fsim PRIVATE -sNODERAWFS=1 -sENVIRONMENT=node)
+    endif()
+    set_target_properties(fsim PROPERTIES SUFFIX .js)
+    target_link_libraries(fsim PRIVATE m)
+else()
+    set_target_properties(fsim PROPERTIES POSITION_INDEPENDENT_CODE OFF)
+    target_link_options(fsim PRIVATE -no-pie -Wl,--wrap=pthread_sigmask -Wl,--wrap=poll -Wl,--wrap=connect)
+    target_link_libraries(fsim PRIVATE pthread m)
+endif()
 # патченный port.c лежит в build — его локальные #include ищем рядом с оригиналом
 set_source_files_properties(${CMAKE_BINARY_DIR}/gen/port_patched.c PROPERTIES
     INCLUDE_DIRECTORIES ${RTOS}/portable/ThirdParty/GCC/Posix)

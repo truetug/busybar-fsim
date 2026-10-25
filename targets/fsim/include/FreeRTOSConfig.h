@@ -68,10 +68,20 @@ extern unsigned long fsim_run_time_counter(void);
 
 #define configTASK_NOTIFICATION_ARRAY_ENTRIES 3
 
+#if defined(__EMSCRIPTEN__) || defined(FSIM_ASSERT_TRACE)
+/* Отладка порта: какое именно условие FreeRTOS не выполнилось */
+#include <stdio.h>
+#define configASSERT(x)                                                                  \
+    if((x) == 0) {                                                                       \
+        fprintf(stderr, "FreeRTOS assert failed: %s (%s:%d)\n", #x, __FILE__, __LINE__); \
+        furi_crash("FreeRTOS Assert");                                                   \
+    }
+#else
 #define configASSERT(x)                \
     if((x) == 0) {                     \
         furi_crash("FreeRTOS Assert"); \
     }
+#endif
 
 #include <limits.h>
 #include <core/check.h>

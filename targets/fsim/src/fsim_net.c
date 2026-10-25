@@ -112,6 +112,7 @@ bool mongoose_tls_init(struct mg_connection* conn, const char* url, const TlsCon
     return false;
 }
 
+#if !defined(__EMSCRIPTEN__)
 /* --- ожидание сокетов ---
    Поток задачи, заблокированный в poll() ядра, для FreeRTOS остаётся «готовым»: задачи с
    меньшим приоритетом не получают процессор, пока он ждёт. Поэтому ждём кусками по тику,
@@ -162,3 +163,5 @@ int __wrap_connect(int fd, const struct sockaddr* address, socklen_t length) {
     }
     return __real_connect(fd, address, length);
 }
+
+#endif

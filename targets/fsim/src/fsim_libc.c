@@ -63,6 +63,7 @@ size_t strlcpy(char* dst, const char* src, size_t size) {
     return length;
 }
 
+#if !defined(__EMSCRIPTEN__)
 /* POSIX-порт FreeRTOS блокирует в потоках задач все сигналы. Заблокированный синхронный
    SIGSEGV убивает процесс молча, мимо обработчика с backtrace — поэтому их не блокируем. */
 #include <signal.h>
@@ -79,3 +80,5 @@ int __wrap_pthread_sigmask(int how, const sigset_t* set, sigset_t* old) {
     }
     return __real_pthread_sigmask(how, set, old);
 }
+
+#endif

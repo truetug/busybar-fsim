@@ -5,8 +5,16 @@
 #include <stdlib.h>
 #include <time.h>
 
+#if defined(__EMSCRIPTEN__)
+/* wasm: символов линкера нет — куча furi в статическом массиве (на Linux это fsim_heap.S) */
+#define FSIM_HEAP_BYTES (64U * 1024 * 1024)
+static uint8_t fsim_heap_area[FSIM_HEAP_BYTES] __attribute__((aligned(16)));
+#define __heap_start__ fsim_heap_area
+#define __heap_end__   (fsim_heap_area + FSIM_HEAP_BYTES)
+#else
 extern uint8_t __heap_start__[];
 extern uint8_t __heap_end__[];
+#endif
 
 uint32_t furi_hal_cpu_get_frequency(void) {
     return 160000000UL;

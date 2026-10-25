@@ -6,7 +6,11 @@
 
 static const char* fsim_take_message(void) {
     const char* message;
+#if defined(__x86_64__)
     __asm__ volatile("mov %%r12, %0" : "=r"(message));
+#else
+    message = NULL; /* wasm: регистров нет, сообщение через r12 не передаётся */
+#endif
     return message;
 }
 

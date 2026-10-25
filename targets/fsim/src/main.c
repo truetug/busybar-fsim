@@ -3,7 +3,9 @@
 #include <furi.h>
 #include <furi_hal.h>
 #include <flipper.h>
+#if !defined(__EMSCRIPTEN__)
 #include <execinfo.h>
+#endif
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -23,6 +25,7 @@ static void fsim_log_to_stdout(const uint8_t* data, size_t size, void* context) 
 }
 
 /* Падение: адреса стека в stderr. Разбор: addr2line -f -e build23/fsim <адреса> */
+#if !defined(__EMSCRIPTEN__)
 static void fsim_crash_handler(int signal_number) {
     void* frames[64];
     int count = backtrace(frames, COUNT_OF(frames));
@@ -30,6 +33,7 @@ static void fsim_crash_handler(int signal_number) {
     backtrace_symbols_fd(frames, count, STDERR_FILENO);
     _exit(128 + signal_number);
 }
+#endif
 
 static int32_t fsim_watchdog(void* context) {
     UNUSED(context);
@@ -135,11 +139,25 @@ static int32_t init_task(void* context) {
     return 0;
 }
 
-int main(void) {
+int main(int argc, char** argv) {
+#if defined(__EMSCRIPTEN__)
+    /* wasm: main идёт в воркере со своим ENV, поэтому настройки приходят аргументами KEY=VALUE
+       (Module.arguments в браузере, argv в node) */
+    for(int i = 1; i < argc; i++) {
+        if(strchr(argv[i], '=')) {
+            putenv(strdup(argv[i]));
+        }
+    }
+#else
+    UNUSED(argc);
+    UNUSED(argv);
+#endif
     setvbuf(stdout, NULL, _IONBF, 0);
+#if !defined(__EMSCRIPTEN__)
     signal(SIGSEGV, fsim_crash_handler);
     signal(SIGBUS, fsim_crash_handler);
     signal(SIGABRT, fsim_crash_handler);
+#endif
     furi_init();
     furi_log_add_handler((FuriLogHandler){.callback = fsim_log_to_stdout, .context = NULL});
     furi_hal_init_early();
