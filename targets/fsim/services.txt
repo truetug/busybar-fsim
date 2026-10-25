@@ -1,0 +1,43 @@
+# Сервисы прошивки, которые собирает fsim (appid из application.fam). Порядок старта — по order.
+# «!replace» — сервис из .fam, но реализация своя (targets/fsim/src).
+# FS-2.2
+storage
+# FS-2.3a
+front_display !replace
+back_display !replace
+gui
+canvas
+font_registry
+loader
+low_power !replace
+power_srv !replace
+# FS-2.3b: input как есть (без intercom), события — из fsim_control.c
+input
+# FS-2.3: desktop запускает Power On, APPS по положению ручки
+desktop
+message
+power_on
+apps_menu_on_start
+apps_menu
+js_app_launcher
+# FS-2.4a: сеть на сокетах хоста — подмены network и wifi, time как есть
+network !replace
+wifi !replace
+time
+# FS-2.5: JS
+js_runner
+# FS-2.4b: web_server как есть, без модулей API на железо и облако (их пути отвечают 501)
+web_server !exclude=http_api/api_audio.c,http_api/api_ble.c,http_api/api_update.c,http_api/api_account.c,http_api/api_smart_home.c,http_api/api_busy.c,http_api/api_log.c,http_api/api_status.c,http_api/api_status_streaming.c,http_api/api_wifi.c
+device_name
+device_info
+sysctl
+api_tokens
+js_app_installer
+discovery !replace
+brightness_control !replace
+status_lights !replace
+mqtt !replace
+# FS-2.7: урезанный виртуальный бар — Off настоящий, Busy / Custom / Settings — заглушки
+soft_off
+busy !replace
+settings_menu !replace

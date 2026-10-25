@@ -1,0 +1,200 @@
+/* Управляющий канал fsim: кнопки, колесо и ручка режимов вместо SiWG917.
+   События идут в сервис input прошивки через его публичный API (input_key_press / release /
+   toggle) — так же, как их доставляет intercom на баре.
+
+   Команды, по одной в строке:
+     switch busy|custom|off|apps|settings   — ручка режимов
+     short|long|press|release <кнопка>      — ok, back, start (и up, down, left, right)
+     wheel <N>                              — колесо: N > 0 вверх, N < 0 вниз
+     wait <мс>
+     mark <метка>                           — строка «мс mark метка» в frames.log (таймлайн записи)
+   FSIM_INPUT="switch apps; wait 2000; short ok" — сценарий при старте.
+   FSIM_CONTROL_PORT=<порт> — TCP на FSIM_CONTROL_HOST (по умолчанию 127.0.0.1), ответ ok / error. */
+#include <furi.h>
+#include <input/input.h>
+#include <arpa/inet.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#define TAG "FsimControl"
+
+#define FSIM_CONTROL_POLL_MS 10
+#define FSIM_SHORT_PRESS_MS  50
+/* Long в input — на втором срабатывании таймера (INPUT_PRESS_TICKS × INPUT_LONG_PRESS_COUNTS) */
+#define FSIM_LONG_PRESS_MS   400
+
+typedef struct {
+    const char* name;
+    InputKey key;
+} FsimKeyName;
+
+static const FsimKeyName fsim_keys[] = {
+    {"up", InputKeyUp},
+    {"down", InputKeyDown},
+    {"right", InputKeyRight},
+    {"left", InputKeyLeft},
+    {"ok", InputKeyOk},
+    {"back", InputKeyBack},
+    {"start", InputKeyStart},
+};
+
+static const FsimKeyName fsim_switch_positions[] = {
+    {"busy", InputKeyBusy},
+    {"custom", InputKeyCustom},
+    {"off", InputKeyOff},
+    {"apps", InputKeyApps},
+    {"settings", InputKeySettings},
+};
+
+static bool fsim_lookup(const FsimKeyName* names, size_t count, const char* name, InputKey* key) {
+    for(size_t i = 0; i < count; i++) {
+        if(strcasecmp(names[i].name, name) == 0) {
+            *key = names[i].key;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool fsim_control_execute(Input* input, char* line) {
+    char* command = strtok(line, " \t\r\n");
+    char* argument = strtok(NULL, " \t\r\n");
+    if(!command) {
+        return true;
+    }
+    if(strcasecmp(command, "mark") == 0 && argument) {
+        const char* directory = getenv("FSIM_FRAMES");
+        if(!directory) {
+            return false;
+        }
+        char path[512];
+        snprintf(path, sizeof(path), "%s/frames.log", directory);
+        FILE* log = fopen(path, "a");
+        if(!log) {
+            return false;
+        }
+        fprintf(log, "%lu mark %s\n", (unsigned long)furi_get_tick(), argument);
+        fclose(log);
+        return true;
+    }
+    InputKey key;
+    if(strcasecmp(command, "switch") == 0 && argument &&
+       fsim_lookup(fsim_switch_positions, COUNT_OF(fsim_switch_positions), argument, &key)) {
+        input_key_toggle(input, key);
+    } else if(strcasecmp(command, "wheel") == 0 && argument) {
+        int steps = atoi(argument);
+        for(int i = 0; i < abs(steps); i++) {
+            input_key_toggle(input, steps > 0 ? InputKeyUp : InputKeyDown);
+            furi_delay_ms(FSIM_CONTROL_POLL_MS);
+        }
+    } else if(strcasecmp(command, "wait") == 0 && argument) {
+        furi_delay_ms((uint32_t)atoi(argument));
+    } else if(argument && fsim_lookup(fsim_keys, COUNT_OF(fsim_keys), argument, &key)) {
+        if(strcasecmp(command, "press") == 0) {
+            input_key_press(input, key);
+        } else if(strcasecmp(command, "release") == 0) {
+            input_key_release(input, key);
+        } else if(strcasecmp(command, "short") == 0 || strcasecmp(command, "long") == 0) {
+            input_key_press(input, key);
+            furi_delay_ms(command[0] == 's' ? FSIM_SHORT_PRESS_MS : FSIM_LONG_PRESS_MS);
+            input_key_release(input, key);
+        } else {
+            return false;
+        }
+    } else {
+        return false;
+    }
+    FURI_LOG_I(TAG, "%s %s", command, argument ? argument : "");
+    return true;
+}
+
+static void fsim_control_run_script(Input* input, const char* script) {
+    char* copy = strdup(script);
+    char* saved = NULL;
+    for(char* step = strtok_r(copy, ";", &saved); step; step = strtok_r(NULL, ";", &saved)) {
+        if(!fsim_control_execute(input, step)) {
+            FURI_LOG_E(TAG, "bad FSIM_INPUT step: %s", step);
+        }
+    }
+    free(copy);
+}
+
+/* Сокеты неблокирующие и опрашиваются из потока furi: блокирующий вызов в задаче POSIX-порта
+   FreeRTOS остановил бы планировщик. */
+static int fsim_control_listen(void) {
+    const char* port = getenv("FSIM_CONTROL_PORT");
+    if(!port) {
+        return -1;
+    }
+    const char* host = getenv("FSIM_CONTROL_HOST") ? getenv("FSIM_CONTROL_HOST") : "127.0.0.1";
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    int reuse = 1;
+    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+    struct sockaddr_in address = {.sin_family = AF_INET, .sin_port = htons((uint16_t)atoi(port))};
+    inet_pton(AF_INET, host, &address.sin_addr);
+    if(bind(listener, (struct sockaddr*)&address, sizeof(address)) != 0 || listen(listener, 1) != 0) {
+        FURI_LOG_E(TAG, "cannot listen on %s:%s: %s", host, port, strerror(errno));
+        close(listener);
+        return -1;
+    }
+    fcntl(listener, F_SETFL, O_NONBLOCK);
+    FURI_LOG_I(TAG, "control on %s:%s", host, port);
+    return listener;
+}
+
+static int32_t fsim_control_thread(void* context) {
+    UNUSED(context);
+    Input* input = furi_record_open(RECORD_INPUT);
+    const char* script = getenv("FSIM_INPUT");
+    if(script) {
+        fsim_control_run_script(input, script);
+    }
+    int listener = fsim_control_listen();
+    if(listener < 0) {
+        return 0;
+    }
+    int client = -1;
+    char buffer[256];
+    size_t length = 0;
+    while(true) {
+        if(client < 0) {
+            client = accept(listener, NULL, NULL);
+            if(client >= 0) {
+                fcntl(client, F_SETFL, O_NONBLOCK);
+                length = 0;
+            }
+        }
+        if(client >= 0) {
+            ssize_t received = recv(client, buffer + length, sizeof(buffer) - 1 - length, 0);
+            if(received == 0 || (received < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                close(client);
+                client = -1;
+            } else if(received > 0) {
+                length += (size_t)received;
+                buffer[length] = 0;
+                char* newline;
+                while((newline = strchr(buffer, '\n'))) {
+                    *newline = 0;
+                    const char* answer = fsim_control_execute(input, buffer) ? "ok\n" : "error\n";
+                    send(client, answer, strlen(answer), MSG_NOSIGNAL);
+                    length -= (size_t)(newline + 1 - buffer);
+                    memmove(buffer, newline + 1, length + 1);
+                }
+                if(length == sizeof(buffer) - 1) {
+                    length = 0;
+                }
+            }
+        }
+        furi_delay_ms(FSIM_CONTROL_POLL_MS);
+    }
+}
+
+void fsim_control_start(void) {
+    furi_thread_start(furi_thread_alloc_ex("FsimControl", 8192, fsim_control_thread, NULL));
+}

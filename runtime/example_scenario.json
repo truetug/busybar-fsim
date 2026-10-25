@@ -1,0 +1,15 @@
+{
+  "intro_ms": 1500,
+  "steps": [
+    {"key": "ok", "pause_ms": 1500},
+    {"key": "down", "pause_ms": 1200},
+    {"key": "up", "pause_ms": 1200},
+    {"key": "ok", "pause_ms": 1500},
+    {"key": "start", "pause_ms": 4000},
+    {"key": "back", "pause_ms": 1800},
+    {"key": "back", "pause_ms": 1500}
+  ],
+  "tail_ms": 1500,
+  "timezone": "Europe/Moscow",
+  "max_seconds": 30
+}

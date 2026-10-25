@@ -1,0 +1,9 @@
+{
+  "format_version": 1,
+  "id": "app.fsim.smoke",
+  "name": "Smoke",
+  "version": "0.0.1",
+  "api_version": "27.9.0",
+  "description": "fsim smoke test app",
+  "author": "fsim"
+}
