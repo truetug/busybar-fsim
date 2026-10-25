@@ -23,3 +23,10 @@ python3 tools/record_scenario.py runtime/example_scenario.json out/   # сцен
 - `tools/frames_to_video.py` — кадры + `frames.log` → mp4 / webm с реальными паузами и ≤ 6 скриншотов.
   Бандл — того же состава, что принимает `decode_video_bundle` каталога.
 - Управляющий канал: `switch`, `short|long|press|release`, `wheel`, `wait`, `mark <метка>`.
+
+## Лицензия
+
+GPL-2.0-or-later (текст — `LICENSE`). fsim собирается из исходников прошивки BUSY Bar
+(`busy-app/busybar-firmware`, GPLv2+) и распространяется на тех же условиях. Образы
+`ghcr.io/truetug/fsim-runtime` и `fsim-runtime-recorder` — производные от прошивки; исходный код образов —
+этот репозиторий, исходники прошивки — upstream по коммиту из тега образа (`dev-<коммит>`, `release-<версия>`).
