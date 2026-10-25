@@ -12,6 +12,9 @@ cp "$ROOT/recorder/Dockerfile" "$ROOT/recorder/server.py" "$ROOT/tools/frames_to
 PROXY=""
 [ -n "${FSIM_BUILD_PROXY:-}" ] && PROXY="--build-arg HTTP_PROXY=$FSIM_BUILD_PROXY --build-arg HTTPS_PROXY=$FSIM_BUILD_PROXY"
 # shellcheck disable=SC2086
-docker build --platform linux/amd64 --add-host host.docker.internal:host-gateway $PROXY \
+SOURCE_LABEL=""
+[ -n "${FSIM_IMAGE_SOURCE:-}" ] && SOURCE_LABEL="--label org.opencontainers.image.source=$FSIM_IMAGE_SOURCE"
+# shellcheck disable=SC2086
+docker build $SOURCE_LABEL --platform linux/amd64 --add-host host.docker.internal:host-gateway $PROXY \
     --build-arg "BASE=fsim-runtime:$TAG" \
     -t "fsim-runtime-recorder:$TAG" "$CTX"

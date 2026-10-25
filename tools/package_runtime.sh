@@ -11,4 +11,7 @@ cp "${FSIM_BINARY:-$ROOT/build23/fsim}" "$CTX/fsim"
 gzip -1 -c "${FSIM_SD:-$ROOT/data/sd.img}" > "$CTX/sd.img.gz"
 printf %s "${FSIM_FIRMWARE:-${TAG#*:}}" > "$CTX/FIRMWARE"
 cp "$ROOT/runtime/entrypoint.sh" "$ROOT/runtime/Dockerfile" "$CTX/"
-docker build --platform linux/amd64 -t "$TAG" "$CTX"
+SOURCE_LABEL=""
+[ -n "${FSIM_IMAGE_SOURCE:-}" ] && SOURCE_LABEL="--label org.opencontainers.image.source=$FSIM_IMAGE_SOURCE"
+# shellcheck disable=SC2086
+docker build $SOURCE_LABEL --platform linux/amd64 -t "$TAG" "$CTX"

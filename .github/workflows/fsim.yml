@@ -1,0 +1,72 @@
+# fsim: сборка прошивки BUSY Bar для хоста, смоук и публикация образов в GHCR.
+# Раз в сутки и вручную. Логика — tools/watch_firmware.py: берёт последнюю версию с API приложений и dev,
+# собирает fsim из исходников их коммита, образ SD из CI того же коммита, гоняет смоук (16 проверок) и
+# контракт рекордера, и только после этого двигает теги stable / dev-current.
+# Падение job = письмо о провале workflow от GitHub (на почту аккаунта; в настройках уведомлений Actions
+# оставить «только упавшие»). Сломанный коммит повторно не собирается, пока не выйдет новый.
+name: fsim
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Пересобрать, даже если коммит уже обработан"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: fsim
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-24.04 # amd64, без эмуляции
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # Состояние наблюдателя (state.json) и кэш исходников / сборки между запусками. Если кэш пропал,
+      # наблюдатель просто пересоберёт и опубликует то же самое.
+      - name: Restore watcher state
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fsim-watch
+          key: fsim-watch-${{ github.run_id }}
+          restore-keys: fsim-watch-
+
+      - name: Build the builder image
+        run: docker build -t fsim-build .
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Watch, build, smoke-test, publish
+        env:
+          # источник образа: так GHCR связывает пакет с репозиторием и берёт его видимость
+          FSIM_IMAGE_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          owner="$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
+          python3 tools/watch_firmware.py --targets dev,release --push "ghcr.io/${owner}" \
+            ${{ inputs.force && '--force' || '' }}
+
+      - name: Keep alerts and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fsim-watch
+          path: |
+            ~/.cache/fsim-watch/alerts
+            ~/.cache/fsim-watch/reports
+            ~/.cache/fsim-watch/state.json
+          if-no-files-found: ignore
+          retention-days: 30

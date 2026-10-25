@@ -1,6 +1,6 @@
 """Наблюдатель за прошивкой: новая сборка в CI → fsim из её исходников → смоук → образ.
 
-    watch_firmware.py [--work DIR] [--targets dev,release] [--force] [--dry-run]
+    watch_firmware.py [--work DIR] [--targets dev,release] [--force] [--dry-run] [--push ПРЕФИКС]
 
 Цели:
   dev       — последняя сборка ветки dev (коммит берётся из имени артефакта CI); не для ревью;
@@ -20,6 +20,8 @@
      и вызывается FSIM_WATCH_NOTIFY (команда, получает путь к файлу), код выхода 2.
      Сломанный коммит повторно не собирается, пока не выйдет новый или не задан --force.
 
+--push ghcr.io/<владелец> (или FSIM_REGISTRY) — после успешного прохода отправить образы
+<префикс>/fsim-runtime[-recorder]:<цель>-<коммит>, :<цель>-current и (для release) :stable.
 Переменные: FSIM_BUILD_PROXY — прокси для контейнеров сборки; FSIM_WATCH_NOTIFY — команда тревоги.
 Состояние и кэш — в --work (по умолчанию ~/.cache/fsim-watch): state.json, src/, build-<цель>/,
 reports/, alerts/. Только стандартная библиотека, git и docker.
@@ -187,7 +189,19 @@ def alert(work: Path, target: str, info: dict, problem: str) -> Path:
     return path
 
 
-def process(work: Path, target: str, state: dict, force: bool, dry_run: bool) -> bool:
+def publish(prefix: str, target: str, tag: str) -> None:
+    """Образы текущей сборки в реестр: тег сборки, <цель>-current и stable (только release)."""
+    tags = {"fsim-runtime": tag, "fsim-runtime-recorder": tag}
+    suffixes = [tag, f"{target}-current"] + (["stable"] if target != "dev" else [])
+    for repository in tags:
+        for suffix in dict.fromkeys(suffixes):
+            remote = f"{prefix.rstrip('/')}/{repository}:{suffix}"
+            run(["docker", "tag", f"{repository}:{tag}", remote])
+            run(["docker", "push", remote])
+            print(f"[{target}] опубликован {remote}")
+
+
+def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, push: str | None = None) -> bool:
     info = resolve(target)
     known = state.get(target, {})
     print(f"[{target}] CI: {info['build']} @ {info['commit']}; состояние: {known.get('commit')} {known.get('status')}")
@@ -226,6 +240,9 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool) ->
             run(["docker", "tag", f"fsim-runtime-recorder:{tag}", "fsim-runtime-recorder:stable"])
         state[target] = {"commit": info["commit"], "build": info["build"], "status": "ok", "image": image,
                          "checked_at": time.time()}
+        if push:
+            stage = "push"
+            publish(push, target, tag)
         save_openapi(work, target, info, state)
         print(f"[{target}] OK → fsim-runtime:{target}-current = {image}" + ("; stable обновлён" if target != "dev" else ""))
         return True
@@ -244,6 +261,7 @@ def main() -> None:
     parser.add_argument("--work", type=Path, default=Path.home() / ".cache" / "fsim-watch")
     parser.add_argument("--targets", default="dev,release")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--push", default=os.environ.get("FSIM_REGISTRY"), help="префикс реестра, например ghcr.io/truetug")
     parser.add_argument("--dry-run", action="store_true", help="только показать, что нашлось в CI")
     args = parser.parse_args()
 
@@ -262,7 +280,7 @@ def main() -> None:
                     continue
             except Exception:  # noqa: BLE001
                 pass
-        ok = process(args.work, target, state, args.force, args.dry_run) and ok
+        ok = process(args.work, target, state, args.force, args.dry_run, args.push) and ok
         state_path.write_text(json.dumps(state, indent=1))
     sys.exit(0 if ok else 2)
 
