@@ -59,9 +59,9 @@ TAIL_MS = 2000  # как в scenario_capture каталога: возврат и
 class RecorderError(Exception):
     """Ошибка с HTTP-статусом и кодом по контракту."""
 
-    def __init__(self, status: int, code: str, message: str, headers: dict | None = None):
+    def __init__(self, status: int, code: str, message: str, headers: dict | None = None, stage: str | None = None):
         super().__init__(message)
-        self.status, self.code, self.headers = status, code, headers or {}
+        self.status, self.code, self.headers, self.stage = status, code, headers or {}, stage
 
 
 # ---------- проверка входных данных ----------
@@ -216,8 +216,10 @@ class Fsim:
                 payload = json.loads(detail)
             except ValueError:
                 payload = {}
+            # error — текст ошибки прошивки как есть; stage — этап (stage | install | launch), на котором она отказала
             raise RecorderError(422, str(payload.get("error_code") or "firmware_error"),
-                                str(payload.get("error") or f"firmware answered HTTP {error.code}")) from None
+                                str(payload.get("error") or f"firmware answered HTTP {error.code}"),
+                                stage=path.rsplit("/", 1)[-1] if path.startswith("apps/") else None) from None
         return json.loads(data) if data.strip() else None
 
     def control(self, command: str) -> None:
@@ -336,7 +338,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def error(self, error: RecorderError):
-        body = json.dumps({"error": str(error), "error_code": error.code}).encode()
+        body = json.dumps({"error": str(error), "error_code": error.code,
+                           **({"stage": error.stage} if error.stage else {})}).encode()
         self.reply(error.status, body, "application/json", error.headers)
 
     def do_GET(self):

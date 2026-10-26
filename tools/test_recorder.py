@@ -130,7 +130,9 @@ def main():
             info.size = len(data)
             archive.addfile(info, io.BytesIO(data))
         status, _, body = post(base, {"package": broken.getvalue(), "scenario": scenario})
-        check("422 от прошивки", status == 422 and b"error_code" in body, f"{status} {body[:120]!r}")
+        detail = json.loads(body) if status == 422 else {}
+        check("422 от прошивки: error_code, текст прошивки как есть и этап", status == 422 and detail.get("error_code") == "manifest_error"
+              and detail.get("error") == "Wrong app manifest" and detail.get("stage") == "stage", f"{status} {body[:140]!r}")
 
         # Успех и 429: второй запрос во время первого
         outcome = {}
