@@ -12,8 +12,8 @@
   1. сверка с состоянием: коммит не изменился — ничего не делаем;
   2. исходники этого коммита с анонимного https GitHub (нужные подмодули, depth 1);
   3. сборка fsim в docker (образ fsim-build) и образ SD из CI-пакетов ТОГО ЖЕ коммита;
-  4. образы fsim-runtime:<цель>-<коммит> и fsim-runtime-recorder:<цель>-<коммит>, смоук прошивки
-     (smoke_runtime.py) и проверка контракта рекордера (test_recorder.py);
+  4. образы fsim-runtime, fsim-runtime-recorder и fsim-runtime-stream (<цель>-<коммит>), смоук прошивки
+     (smoke_runtime.py), контракт рекордера (test_recorder.py) и сервиса стрима (test_stream.py);
   5. всё прошло — теги <образ>:<цель>-current переезжают на новые образы; у релиза ещё и `stable`
      (его берёт каталог; dev — только ранний сигнал о поломках и отличиях от stable);
      не прошёл — current остаётся на последней рабочей сборке, пишется alerts/<время>-<цель>.md
@@ -191,7 +191,7 @@ def alert(work: Path, target: str, info: dict, problem: str) -> Path:
 
 def publish(prefix: str, target: str, tag: str) -> None:
     """Образы текущей сборки в реестр: тег сборки, <цель>-current и stable (только release)."""
-    tags = {"fsim-runtime": tag, "fsim-runtime-recorder": tag}
+    tags = {"fsim-runtime": tag, "fsim-runtime-recorder": tag, "fsim-runtime-stream": tag}
     suffixes = [tag, f"{target}-current"] + (["stable"] if target != "dev" else [])
     for repository in tags:
         for suffix in dict.fromkeys(suffixes):
@@ -221,6 +221,8 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, pu
         stage = "recorder"
         tag = f"{target}-{info['commit']}"
         run([str(ROOT / "tools" / "package_recorder.sh"), tag])
+        stage = "stream"
+        run([str(ROOT / "tools" / "package_stream.sh"), tag])
         stage = "smoke"
         report = work / "reports" / f"{target}-{info['commit']}.json"
         report.parent.mkdir(parents=True, exist_ok=True)
@@ -233,11 +235,18 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, pu
                                    f"fsim-runtime-recorder:{tag}"], capture_output=True, text=True)
         if contract.returncode != 0:
             raise RuntimeError(f"контракт fsim-recorder не прошёл:\n{contract.stdout[-1500:]}")
+        stage = "stream-test"
+        stream = subprocess.run([sys.executable, str(ROOT / "tools" / "test_stream.py"), "--image",
+                                 f"fsim-runtime-stream:{tag}"], capture_output=True, text=True)
+        if stream.returncode != 0:
+            raise RuntimeError(f"контракт fsim-stream не прошёл:\n{stream.stdout[-1500:]}")
         run(["docker", "tag", image, f"fsim-runtime:{target}-current"])
         run(["docker", "tag", f"fsim-runtime-recorder:{tag}", f"fsim-runtime-recorder:{target}-current"])
+        run(["docker", "tag", f"fsim-runtime-stream:{tag}", f"fsim-runtime-stream:{target}-current"])
         if target != "dev":  # каталог берёт только stable: последний стабильный релиз, прошедший смоук
             run(["docker", "tag", image, "fsim-runtime:stable"])
             run(["docker", "tag", f"fsim-runtime-recorder:{tag}", "fsim-runtime-recorder:stable"])
+            run(["docker", "tag", f"fsim-runtime-stream:{tag}", "fsim-runtime-stream:stable"])
         state[target] = {"commit": info["commit"], "build": info["build"], "status": "ok", "image": image,
                          "checked_at": time.time()}
         if push:
@@ -250,7 +259,7 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, pu
         # «Сломанным» коммит считаем, только если не собралась или не прошла смоук его сборка;
         # сбой доставки исходников (сеть, GitHub) повторится при следующем запуске
         state[target] = {**known, "status": "failed", "checked_at": time.time(),
-                         **({"failed_commit": info["commit"]} if stage in ("build", "recorder", "smoke", "recorder-test") else {})}
+                         **({"failed_commit": info["commit"]} if stage in ("build", "recorder", "stream", "smoke", "recorder-test", "stream-test") else {})}
         path = alert(work, target, info, f"этап «{stage}»: {error}")
         print(f"[{target}] ПРОВАЛ на этапе {stage}, тревога: {path}", file=sys.stderr)
         return False

@@ -151,8 +151,43 @@ static bool fsim_net_is_loopback(const struct sockaddr* address) {
     return true; /* AF_UNIX и прочее — локальное */
 }
 
+/* Порт HTTP API бара зашит в прошивке (80). Несколько fsim на одной машине (сессии fsim-stream) — у каждого
+   свой порт, FSIM_HTTP_PORT: слушающий сокет и обращения приложений на localhost:80 перенаправляются. */
+static int fsim_http_port(void) {
+    static int port = -1;
+    if(port < 0) {
+        const char* text = getenv("FSIM_HTTP_PORT");
+        port = text ? atoi(text) : 80;
+    }
+    return port;
+}
+
+int __real_bind(int fd, const struct sockaddr* address, socklen_t length);
+
+int __wrap_bind(int fd, const struct sockaddr* address, socklen_t length) {
+    if(address && fsim_http_port() != 80) {
+        if(address->sa_family == AF_INET && ntohs(((const struct sockaddr_in*)address)->sin_port) == 80) {
+            struct sockaddr_in changed = *(const struct sockaddr_in*)address;
+            changed.sin_port = htons((uint16_t)fsim_http_port());
+            return __real_bind(fd, (const struct sockaddr*)&changed, sizeof(changed));
+        }
+        if(address->sa_family == AF_INET6 && ntohs(((const struct sockaddr_in6*)address)->sin6_port) == 80) {
+            struct sockaddr_in6 changed = *(const struct sockaddr_in6*)address;
+            changed.sin6_port = htons((uint16_t)fsim_http_port());
+            return __real_bind(fd, (const struct sockaddr*)&changed, sizeof(changed));
+        }
+    }
+    return __real_bind(fd, address, length);
+}
+
 int __wrap_connect(int fd, const struct sockaddr* address, socklen_t length) {
     static int allow_host = -1;
+    if(address && address->sa_family == AF_INET && fsim_http_port() != 80 && fsim_net_is_loopback(address) &&
+       ntohs(((const struct sockaddr_in*)address)->sin_port) == 80) {
+        struct sockaddr_in changed = *(const struct sockaddr_in*)address;
+        changed.sin_port = htons((uint16_t)fsim_http_port());
+        return __real_connect(fd, (const struct sockaddr*)&changed, sizeof(changed));
+    }
     if(allow_host < 0) {
         const char* mode = getenv("FSIM_NETWORK");
         allow_host = mode && strcmp(mode, "host") == 0;

@@ -14,6 +14,8 @@
 
 #define TAG "FsimDisplay"
 
+void fsim_stream_publish(int display, const uint8_t* data, size_t length);
+
 struct FrontDisplaySrv {
     FuriMutex* mutex;
     uint8_t frame[FRONT_DISPLAY_BUF_SIZE];
@@ -69,6 +71,7 @@ void front_display_draw(FrontDisplaySrv* instance, const uint8_t* buf) {
             rgb[i + 2] = buf[i];
         }
         fsim_display_save("front", instance->number, FRONT_DISPLAY_W, FRONT_DISPLAY_H, 3, rgb);
+        fsim_stream_publish(0, rgb, FRONT_DISPLAY_W * FRONT_DISPLAY_H * 3);
     }
     furi_mutex_release(instance->mutex);
 }
@@ -94,6 +97,7 @@ void back_display_draw(BackDisplaySrv* instance, const uint8_t* data) {
         memcpy(instance->frame, data, BACK_DISPLAY_BUF_SIZE);
         instance->number++;
         fsim_display_save("back", instance->number, BACK_DISPLAY_W, BACK_DISPLAY_H, 1, data);
+        fsim_stream_publish(1, data, BACK_DISPLAY_W * BACK_DISPLAY_H);
     }
     furi_mutex_release(instance->mutex);
 }

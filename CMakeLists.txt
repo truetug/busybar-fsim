@@ -241,6 +241,7 @@ add_executable(fsim
     ${TARGET_DIR}/src/fsim_hal.c
     ${TARGET_DIR}/src/fsim_control.c
     ${TARGET_DIR}/src/fsim_net.c
+    ${TARGET_DIR}/src/fsim_stream.c
     ${TARGET_DIR}/src/fsim_peripherals.c
     ${TARGET_DIR}/src/fsim_virtual_apps.c
     ${TARGET_DIR}/src/fsim_web_stubs.c
@@ -308,7 +309,7 @@ if(EMSCRIPTEN)
     target_link_libraries(fsim PRIVATE m)
 else()
     set_target_properties(fsim PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-    target_link_options(fsim PRIVATE -no-pie -Wl,--wrap=pthread_sigmask -Wl,--wrap=poll -Wl,--wrap=connect)
+    target_link_options(fsim PRIVATE -no-pie -Wl,--wrap=pthread_sigmask -Wl,--wrap=poll -Wl,--wrap=connect -Wl,--wrap=bind)
     target_link_libraries(fsim PRIVATE pthread m)
 endif()
 # патченный port.c лежит в build — его локальные #include ищем рядом с оригиналом

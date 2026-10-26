@@ -119,6 +119,7 @@ static void fsim_apply_time_settings(void) {
 }
 
 void fsim_control_start(void);
+void fsim_stream_start(void);
 
 static int32_t init_task(void* context) {
     UNUSED(context);
@@ -129,6 +130,7 @@ static int32_t init_task(void* context) {
     }
     fsim_apply_time_settings();
     fsim_control_start();
+    fsim_stream_start();
     if(getenv("FSIM_START_APP")) {
         furi_thread_start(furi_thread_alloc_ex("FsimStart", 4096, fsim_start_app, NULL));
     }

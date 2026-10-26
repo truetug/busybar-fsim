@@ -22,6 +22,8 @@ python3 tools/record_scenario.py runtime/example_scenario.json out/   # сцен
   лимиты памяти / процессора / процессов. Соединения не к loopback отклоняются (`FSIM_NETWORK=host` — разрешить).
 - `tools/frames_to_video.py` — кадры + `frames.log` → mp4 / webm с реальными паузами и ≤ 6 скриншотов.
   Бандл — того же состава, что принимает `decode_video_bundle` каталога.
+- `fsim-runtime-stream` (`stream/server.py`, FS-7): виртуальный бар в браузере — сессия = один процесс fsim;
+  WebSocket (кадры по изменению ← → ввод), прокси HTTP API бара сессии, лимиты и метрики. Проверка: `tools/test_stream.py`.
 - Управляющий канал: `switch`, `short|long|press|release`, `wheel`, `wait`, `mark <метка>`.
 
 ## Лицензия
