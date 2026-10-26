@@ -14,6 +14,7 @@
    FSIM_CONTROL_PORT=<порт> — TCP на FSIM_CONTROL_HOST (по умолчанию 127.0.0.1), ответ ok / error. */
 #include <furi.h>
 #include <input/input.h>
+#include <desktop/desktop.h>
 #include <time/time.h>
 #include <utz/utz.h>
 #include <datetime/datetime.h>
@@ -200,6 +201,12 @@ static int fsim_control_listen(void) {
 static int32_t fsim_control_thread(void* context) {
     UNUSED(context);
     Input* input = furi_record_open(RECORD_INPUT);
+    /* desktop создаёт свою запись после подписки на положение ручки. Начальный сценарий («switch apps») до этого
+       момента теряется: на быстрой машине прошивка грузится за ~10 мс, desktop игнорирует запросы запуска, пока не
+       получит начальное положение, и приложение, запущенное по API сразу после старта, не запускается (в эмуляции
+       всё медленнее, поэтому там гонки не видно). */
+    furi_record_open(RECORD_DESKTOP);
+    furi_record_close(RECORD_DESKTOP);
     const char* script = getenv("FSIM_INPUT");
     if(script) {
         fsim_control_run_script(input, script);
