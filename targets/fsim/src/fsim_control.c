@@ -15,6 +15,7 @@
 #include <furi.h>
 #include <input/input.h>
 #include <desktop/desktop.h>
+#include <loader/loader.h>
 #include <time/time.h>
 #include <utz/utz.h>
 #include <datetime/datetime.h>
@@ -207,6 +208,20 @@ static int32_t fsim_control_thread(void* context) {
        всё медленнее, поэтому там гонки не видно). */
     furi_record_open(RECORD_DESKTOP);
     furi_record_close(RECORD_DESKTOP);
+    /* desktop реагирует на положение ручки, только пока загрузчик считает текущим приложением «Power On»
+       (desktop_startup_app_is_running). В первые миллисекунды после старта это ещё не так: ждём. */
+    Loader* loader = furi_record_open(RECORD_LOADER);
+    FuriString* current = furi_string_alloc();
+    for(int attempt = 0; attempt < 600; attempt++) {
+        loader_get_application_name(loader, current);
+        if(furi_string_equal(current, "Power On")) {
+            break;
+        }
+        furi_delay_ms(10);
+    }
+    furi_string_free(current);
+    furi_record_close(RECORD_LOADER);
+    furi_delay_ms(50);
     const char* script = getenv("FSIM_INPUT");
     if(script) {
         fsim_control_run_script(input, script);
