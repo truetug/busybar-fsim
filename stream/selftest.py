@@ -182,7 +182,7 @@ async def main() -> None:
         async with http.post(f"{api3}/api/apps/stage", data=smoke_package(Path("/opt/stream/net_app/app.fsim.nettest"))) as reply:
             staged = await reply.json(content_type=None)
         async with http.post(f"{api3}/api/apps/install", params={"install_key": staged["install_key"]}) as reply:
-            pass
+            check("сеть: установка приложения", reply.status == 200, str(reply.status))
         async with http.post(f"{api3}/api/apps/launch", params={"app_id": "app.fsim.nettest"}) as reply:
             check("приложение с сетью запущено", reply.status == 200, str(reply.status))
         log = {"entries": []}
@@ -193,6 +193,14 @@ async def main() -> None:
             if any(e["host"] == "mocked.test" and e["method"] == "POST" for e in log["entries"]):
                 break
         entries = log["entries"]
+        if not any(e["source"] == "mock" for e in entries):  # диагностика для CI: что делала прошивка этой сессии
+            print("--- диагностика: лог сети:", json.dumps(log)[:400])
+            async with http.get(f"{api3}/api/apps/list") as reply:
+                print("--- приложения:", [a["id"] for a in (await reply.json(content_type=None))["apps"]])
+            for session_dir in sorted(Path("/run/fsim-stream").glob("s-*"), key=lambda d: d.stat().st_mtime)[-1:]:
+                text = (session_dir / "fsim.log").read_text(errors="replace").splitlines()
+                print("--- fsim.log сессии (хвост):")
+                print("\n".join(line[:200] for line in text[-40:] if "WARN]" not in line))
         check("лог сети: моки", any(e["source"] == "mock" and e["host"] == "mocked.test" for e in entries), f"{len(entries)} записей")
         check("лог сети: хост вне списка отклонён", any(e["source"] == "rejected" and e["host"] == "live.test" for e in entries))
         check("лог сети: секреты замаскированы", "SECRET1" not in json.dumps(entries) and "TOPSECRET" not in json.dumps(entries))
