@@ -2,9 +2,10 @@
 # Собирается tools/package_recorder.sh. Сеть из прошивки закрыта самим fsim; Docker внутри не нужен.
 ARG BASE=fsim-runtime:dev-current
 FROM --platform=linux/amd64 ${BASE}
-RUN apt-get update && apt-get install -y --no-install-recommends python3 ffmpeg \
+RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-aiohttp ca-certificates ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-COPY server.py frames_to_video.py /opt/recorder/
+COPY server.py frames_to_video.py netproxy.py /opt/recorder/
+COPY net_app /opt/recorder/net_app
 ENV RECORDER_PORT=8080 RECORDER_RUN_DIR=/run/fsim-recorder
 EXPOSE 8080
 # Проверка без curl (его в образе нет): /v1/health отвечает 200 только после самопроверки прошивки при старте,

@@ -1,0 +1,9 @@
+{
+  "format_version": 1,
+  "id": "app.fsim.nettest",
+  "name": "Net test",
+  "version": "0.0.1",
+  "api_version": "27.9.0",
+  "description": "fsim network proxy test app",
+  "author": "fsim"
+}

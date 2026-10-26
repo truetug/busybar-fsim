@@ -40,14 +40,14 @@ def icon_png(size: int = 8) -> bytes:
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
-def smoke_package() -> bytes:
+def smoke_package(root: Path = SMOKE) -> bytes:
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w") as archive:
-        for path in sorted(SMOKE.rglob("*")):
+        for path in sorted(root.rglob("*")):
             if path.is_file():
-                archive.add(path, arcname=f"{SMOKE.name}/{path.relative_to(SMOKE)}", recursive=False)
+                archive.add(path, arcname=f"{root.name}/{path.relative_to(root)}", recursive=False)
         icon = icon_png()
-        info = tarfile.TarInfo(f"{SMOKE.name}/appmeta/icon_front_8x8.png")
+        info = tarfile.TarInfo(f"{root.name}/appmeta/icon_front_8x8.png")
         info.size = len(icon)
         archive.addfile(info, io.BytesIO(icon))
     return buffer.getvalue()
@@ -169,6 +169,37 @@ async def main() -> None:
         async with http.get(f"{BASE}/metrics") as reply:
             text = await reply.text()
             check("метрики", "fsim_stream_sessions_started_total 2" in text and "fsim_stream_input_to_frame_seconds_count" in text)
+
+        # --- сеть сессии (FS-8): белый список, моки, лог ---
+        async with http.post(f"{BASE}/v1/sessions", headers=AUTH, json={"network": {"allow": ["10.0.0.1"]}}) as reply:
+            check("400 неверный network", reply.status == 400, str(reply.status))
+        network = {"allow": [], "mocks": [{"host": "mocked.test", "path": "/price", "body": {"usd": 7}},
+                                          {"host": "mocked.test", "path": "/post", "method": "POST", "status": 201, "body": "ok"}]}
+        async with http.post(f"{BASE}/v1/sessions", headers=AUTH, json={"network": network}) as reply:
+            third = await reply.json()
+            check("сессия с network", reply.status == 201)
+        api3 = third["api_url"]
+        async with http.post(f"{api3}/api/apps/stage", data=smoke_package(Path("/opt/stream/net_app/app.fsim.nettest"))) as reply:
+            staged = await reply.json(content_type=None)
+        async with http.post(f"{api3}/api/apps/install", params={"install_key": staged["install_key"]}) as reply:
+            pass
+        async with http.post(f"{api3}/api/apps/launch", params={"app_id": "app.fsim.nettest"}) as reply:
+            check("приложение с сетью запущено", reply.status == 200, str(reply.status))
+        log = {"entries": []}
+        for _ in range(40):
+            await asyncio.sleep(1)
+            async with http.get(f"{BASE}/v1/sessions/{third['id']}/network", headers=AUTH) as reply:
+                log = await reply.json()
+            if any(e["host"] == "mocked.test" and e["method"] == "POST" for e in log["entries"]):
+                break
+        entries = log["entries"]
+        check("лог сети: моки", any(e["source"] == "mock" and e["host"] == "mocked.test" for e in entries), f"{len(entries)} записей")
+        check("лог сети: хост вне списка отклонён", any(e["source"] == "rejected" and e["host"] == "live.test" for e in entries))
+        check("лог сети: секреты замаскированы", "SECRET1" not in json.dumps(entries) and "TOPSECRET" not in json.dumps(entries))
+        async with http.get(f"{BASE}/v1/sessions/{third['id']}/network") as reply:
+            check("лог сети только по внутреннему токену", reply.status == 401, str(reply.status))
+        async with http.delete(f"{BASE}/v1/sessions/{third['id']}", headers=AUTH) as reply:
+            pass
 
 
 asyncio.run(main())

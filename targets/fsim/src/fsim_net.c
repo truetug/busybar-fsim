@@ -20,6 +20,13 @@
 
 #define DUMMY_RECORD ((void*)0xD00DAD)
 
+/* Порт из переменной окружения (0 — не задан); FSIM_PROXY_* — прокси стенда, FS-8 */
+static int fsim_env_port(const char* name) {
+    const char* text = getenv(name);
+    return text ? atoi(text) : 0;
+}
+
+
 /* --- network --- */
 
 struct netif* network_find_netif(NetworkNetif id) {
@@ -94,7 +101,7 @@ int32_t wifi_srv(void* arg) {
         .state = WifiStateConnected,
         .ip_config = {.mgmt = WifiIpManagementDynamic, .type = WifiIpTypeV4},
     };
-    info.ip_config.ip4.dns.value = fsim_net_resolver();
+    info.ip_config.ip4.dns.value = fsim_env_port("FSIM_PROXY_DNS_PORT") ? htonl(INADDR_LOOPBACK) : fsim_net_resolver();
     furi_state_set(instance->state, &info);
     furi_record_create(RECORD_WIFI, instance);
     FURI_LOG_I(TAG, "wifi connected (host network), dns " WIFI_IP4_ADDR_FORMAT,
@@ -105,11 +112,16 @@ int32_t wifi_srv(void* arg) {
 
 /* --- TLS: пока нет --- */
 
+/* Сеть стенда (FS-8): шифрования в fsim нет. mongoose ставит is_tls по схеме URL; здесь флаг снимается, и
+   приложение шлёт обычный HTTP с Host: — его принимает прокси стенда, проверяет белый список и сам ходит наружу
+   по HTTPS (с проверкой сертификата). Без прокси (FSIM_PROXY_* не заданы) соединение всё равно не состоится:
+   DNS и connect не к loopback отклоняются. */
 bool mongoose_tls_init(struct mg_connection* conn, const char* url, const TlsConfig* tls_config) {
-    UNUSED(conn);
+    UNUSED(url);
     UNUSED(tls_config);
-    FURI_LOG_E(TAG, "TLS is not built in fsim yet: %s", url);
-    return false;
+    conn->is_tls = 0;
+    conn->is_tls_hs = 0;
+    return true;
 }
 
 #if !defined(__EMSCRIPTEN__)
@@ -162,7 +174,40 @@ static int fsim_http_port(void) {
     return port;
 }
 
+/* Прокси стенда (FS-8): DNS-ответчик и два HTTP-порта (для 443 → наружу https, для 80 → наружу http).
+   Внешние имена прокси резолвит в 127.0.0.2, поэтому 127.0.0.1:80 остаётся API самого бара. */
+/* Вернуть порт прокси, на который надо перенаправить это обращение, или 0 */
+static int fsim_proxy_port_for(const struct sockaddr* address) {
+    if(!address || address->sa_family != AF_INET) {
+        return 0;
+    }
+    const struct sockaddr_in* v4 = (const struct sockaddr_in*)address;
+    uint32_t host = ntohl(v4->sin_addr.s_addr);
+    uint16_t port = ntohs(v4->sin_port);
+    if(host == 0x7f000002) {
+        if(port == 443) return fsim_env_port("FSIM_PROXY_HTTPS_PORT");
+        if(port == 80) return fsim_env_port("FSIM_PROXY_HTTP_PORT");
+    } else if(host == 0x7f000001 && port == 53) {
+        return fsim_env_port("FSIM_PROXY_DNS_PORT");
+    }
+    return 0;
+}
+
 int __real_bind(int fd, const struct sockaddr* address, socklen_t length);
+ssize_t __real_sendto(int fd, const void* buffer, size_t length, int flags, const struct sockaddr* address, socklen_t address_length);
+
+/* mongoose отправляет DNS-запросы по UDP через sendto с явным адресом — его тоже надо перенаправить */
+ssize_t __wrap_sendto(int fd, const void* buffer, size_t length, int flags, const struct sockaddr* address,
+    socklen_t address_length) {
+    int proxy_port = fsim_proxy_port_for(address);
+    if(proxy_port) {
+        struct sockaddr_in changed = *(const struct sockaddr_in*)address;
+        changed.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        changed.sin_port = htons((uint16_t)proxy_port);
+        return __real_sendto(fd, buffer, length, flags, (const struct sockaddr*)&changed, sizeof(changed));
+    }
+    return __real_sendto(fd, buffer, length, flags, address, address_length);
+}
 
 int __wrap_bind(int fd, const struct sockaddr* address, socklen_t length) {
     if(address && fsim_http_port() != 80) {
@@ -182,6 +227,13 @@ int __wrap_bind(int fd, const struct sockaddr* address, socklen_t length) {
 
 int __wrap_connect(int fd, const struct sockaddr* address, socklen_t length) {
     static int allow_host = -1;
+    int proxy_port = fsim_proxy_port_for(address);
+    if(proxy_port) {
+        struct sockaddr_in changed = *(const struct sockaddr_in*)address;
+        changed.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        changed.sin_port = htons((uint16_t)proxy_port);
+        return __real_connect(fd, (const struct sockaddr*)&changed, sizeof(changed));
+    }
     if(address && address->sa_family == AF_INET && fsim_http_port() != 80 && fsim_net_is_loopback(address) &&
        ntohs(((const struct sockaddr_in*)address)->sin_port) == 80) {
         struct sockaddr_in changed = *(const struct sockaddr_in*)address;

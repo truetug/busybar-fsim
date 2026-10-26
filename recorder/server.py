@@ -37,6 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, "/opt/recorder")
 from frames_to_video import build_video  # noqa: E402
+from netproxy import NetProxy, validate_network  # noqa: E402
 
 FSIM_BINARY = os.environ.get("FSIM_BINARY", "/opt/fsim/fsim")
 FSIM_SD_GZ = os.environ.get("FSIM_SD_GZ", "/opt/fsim/sd.img.gz")
@@ -108,6 +109,11 @@ def parse_scenario(text: str) -> dict:
         if not match or int(match[1]) > 23 or int(match[2]) > 59 or int(match[3]) > 59:
             bad("clock must be HH:MM:SS")
         scenario["clock"] = clock
+    if raw.get("network") is not None:
+        try:
+            scenario["network"] = validate_network(raw["network"])
+        except ValueError as error:
+            bad(str(error))
     return scenario
 
 
@@ -152,12 +158,13 @@ def parse_multipart(content_type: str, body: bytes) -> dict[str, bytes]:
 class Fsim:
     """Один процесс fsim с чистым образом SD; закрывается всегда, вместе со своей папкой."""
 
-    def __init__(self, record: bool, run_seconds: int):
+    def __init__(self, record: bool, run_seconds: int, extra_env: dict | None = None):
         RUN_ROOT.mkdir(parents=True, exist_ok=True)
         self.dir = Path(tempfile.mkdtemp(prefix="run-", dir=RUN_ROOT))
         self.frames = self.dir / "frames"
         self.frames.mkdir()
         self.record, self.run_seconds, self.process = record, run_seconds, None
+        self.extra_env = extra_env or {}
 
     def __enter__(self) -> "Fsim":
         # Чистая прошивка: образ SD разворачивается заново, пустые блоки — дырами (sparse)
@@ -168,6 +175,7 @@ class Fsim:
             "FSIM_INPUT": "switch apps", "FSIM_CONTROL_PORT": str(CONTROL_PORT), "FSIM_CONTROL_HOST": "127.0.0.1",
             "FSIM_RUN_SECONDS": str(self.run_seconds),
         }
+        env.update(self.extra_env)
         if self.record:
             env.update(FSIM_FRAMES=str(self.frames), FSIM_FRAMES_HISTORY="1")
         self.log = open(self.dir / "fsim.log", "wb")
@@ -234,7 +242,22 @@ def record(package: bytes, app_id: str, scenario: dict) -> tuple[bytes, str]:
             raise RecorderError(504, "timeout", "scenario exceeded the time limit")
         time.sleep(milliseconds / 1000)
 
-    with Fsim(record=True, run_seconds=scenario["duration_s"] + 90) as fsim:
+    proxy = None
+    proxy_env: dict[str, str] = {}
+    if scenario.get("network"):  # сеть стенда (FS-8): без поля сети нет
+        proxy = NetProxy(scenario["network"])
+        ports = proxy.start()
+        proxy_env = {"FSIM_PROXY_DNS_PORT": str(ports["dns"]), "FSIM_PROXY_HTTP_PORT": str(ports["http"]),
+                     "FSIM_PROXY_HTTPS_PORT": str(ports["https"])}
+    try:
+        return _record(package, app_id, scenario, deadline, pause, proxy, proxy_env)
+    finally:
+        if proxy:
+            proxy.stop()
+
+
+def _record(package: bytes, app_id: str, scenario: dict, deadline: float, pause, proxy, proxy_env: dict) -> tuple[bytes, str]:
+    with Fsim(record=True, run_seconds=scenario["duration_s"] + 90, extra_env=proxy_env) as fsim:
         fsim.wait_api(deadline)
         api_semver = fsim.call("GET", "version")["api_semver"]
         staged = fsim.call("POST", "apps/stage", body=package)
@@ -242,6 +265,8 @@ def record(package: bytes, app_id: str, scenario: dict) -> tuple[bytes, str]:
         if scenario.get("clock"):
             fsim.control(f"time set {scenario['clock']}")  # до запуска: приложение сразу видит нужное время
         fsim.call("POST", "apps/launch", {"app_id": app_id})
+        if proxy:
+            proxy.set_epoch()  # t_ms в логе сети — от начала окна записи
         fsim.mark("start")
         window = time.monotonic()
         pause(scenario["intro_delay_ms"])
@@ -270,7 +295,8 @@ def record(package: bytes, app_id: str, scenario: dict) -> tuple[bytes, str]:
         bundle = fsim.dir / "bundle.tar.gz"
         try:
             build_video(fsim.frames, out, from_ms=begin, to_ms=marks["end"], hold_ms=1000, bundle=bundle,
-                        duration_s=scenario["duration_s"], extra={"timeline": timeline, "firmware": FIRMWARE})
+                        duration_s=scenario["duration_s"], extra={"timeline": timeline, "firmware": FIRMWARE,
+                                                                        **({"network_log": proxy.render_log()} if proxy else {})})
         except ValueError as error:
             raise RuntimeError(f"no frames recorded: {error}") from None
         return bundle.read_bytes(), api_semver

@@ -3,9 +3,11 @@
 Сессия = один зритель = процесс fsim с чистой прошивкой (образ SD разворачивается заново), сеть наружу закрыта.
 
     POST   /v1/sessions            (Authorization: Bearer <внутренний токен>, тело необязательно:
-                                    {"timezone": "Europe/Moscow", "clock": "12:34:55"})
+                                    {"timezone": "Europe/Moscow", "clock": "12:34:55",
+                                     "network": {"allow": [...], "mocks": [...]}})   — без network сети нет
            → 201 {"id","ws_url","api_url","token","expires_at","limits"} | 429 + Retry-After (мест нет)
     DELETE /v1/sessions/{id}       (внутренний токен) — завершить досрочно
+    GET    /v1/sessions/{id}/network (внутренний токен) — лог сети сессии: {entries, total, truncated}
     GET    /v1/sessions/{id}/ws    WebSocket, ?token=<токен сессии>
     ANY    /v1/sessions/{id}/bar/{token}/api/...   прокси HTTP API бара сессии (apps/stage, install, launch …)
     GET    /v1/health, GET /metrics
@@ -38,6 +40,11 @@ import zlib
 from pathlib import Path
 
 from aiohttp import ClientSession, ClientTimeout, WSMsgType, web
+
+import sys
+
+sys.path.insert(0, "/opt/stream")
+from netproxy import NetProxy, validate_network  # noqa: E402
 
 FSIM_BINARY = os.environ.get("FSIM_BINARY", "/opt/fsim/fsim")
 FSIM_SD_GZ = os.environ.get("FSIM_SD_GZ", "/opt/fsim/sd.img.gz")
@@ -135,7 +142,9 @@ def free_port() -> int:
 class Session:
     """Один процесс fsim и всё, что с ним связано: порты, канал управления, поток кадров, зрители."""
 
-    def __init__(self, timezone: str | None, clock: str | None):
+    def __init__(self, timezone: str | None, clock: str | None, network: dict | None = None):
+        self.network = network
+        self.proxy: NetProxy | None = None
         self.id = uuid.uuid4().hex[:16]
         self.token = secrets.token_urlsafe(24)
         self.timezone, self.clock = timezone, clock
@@ -169,6 +178,11 @@ class Session:
             "FSIM_STREAM_PORT": str(self.stream_port), "FSIM_STREAM_HOST": "127.0.0.1",
             "FSIM_RUN_SECONDS": str(SETTINGS.max_s + 120),
         }
+        if self.network:  # сеть стенда (FS-8): белый список, моки, лог; без поля сети нет
+            self.proxy = NetProxy(self.network)
+            ports = self.proxy.start()
+            env.update(FSIM_PROXY_DNS_PORT=str(ports["dns"]), FSIM_PROXY_HTTP_PORT=str(ports["http"]),
+                       FSIM_PROXY_HTTPS_PORT=str(ports["https"]))
         log = open(self.dir / "fsim.log", "wb")
         self.process = await asyncio.create_subprocess_exec(
             FSIM_BINARY, env=env, cwd=self.dir, stdout=log, stderr=asyncio.subprocess.STDOUT,
@@ -273,6 +287,8 @@ class Session:
                                 message=reason.encode())
         for task in self.tasks:
             task.cancel()
+        if self.proxy:
+            self.proxy.stop()
         if self.process and self.process.returncode is None:
             try:
                 os.killpg(self.process.pid, signal.SIGTERM)
@@ -390,12 +406,18 @@ async def create_session(request: web.Request) -> web.Response:
         return json_error(400, "session_invalid", "invalid timezone")
     if clock is not None and not (isinstance(clock, str) and re.fullmatch(r"([01]\d|2[0-3]):[0-5]\d:[0-5]\d", clock)):
         return json_error(400, "session_invalid", "clock must be HH:MM:SS")
+    network = None
+    if body.get("network") is not None:
+        try:
+            network = validate_network(body["network"])
+        except ValueError as error:
+            return json_error(400, "session_invalid", str(error))
     if app.capacity_used() >= SETTINGS.max_sessions:
         Metrics.rejected["capacity"] = Metrics.rejected.get("capacity", 0) + 1
         return json_error(429, "busy", "no free sessions", {"Retry-After": "15"})
     app.starting += 1
     began = time.monotonic()
-    session = Session(timezone, clock)
+    session = Session(timezone, clock, network)
     try:
         await session.start()
     except Exception as error:  # noqa: BLE001
@@ -426,6 +448,18 @@ async def delete_session(request: web.Request) -> web.Response:
         return json_error(404, "not_found", "no such session")
     await session.stop("deleted")
     return web.Response(status=204)
+
+
+async def network_log(request: web.Request) -> web.Response:
+    """Лог сети сессии (FS-8): внутренний токен; без поля network в сессии — пустой лог."""
+    app: App = request.app["state"]
+    if not internal_auth(request):
+        return json_error(401, "unauthorized", "internal token required")
+    session = app.sessions.get(request.match_info["id"])
+    if session is None:
+        return json_error(404, "not_found", "no such session")
+    log = session.proxy.render_log() if session.proxy else {"entries": [], "total": 0, "truncated": False}
+    return web.json_response(log)
 
 
 def find_session(request: web.Request, token: str | None) -> Session | None:
@@ -521,7 +555,7 @@ def make_app() -> web.Application:
     application.add_routes([
         web.get("/v1/health", health), web.get("/metrics", metrics),
         web.post("/v1/sessions", create_session), web.delete("/v1/sessions/{id}", delete_session),
-        web.get("/v1/sessions/{id}/ws", websocket),
+        web.get("/v1/sessions/{id}/ws", websocket), web.get("/v1/sessions/{id}/network", network_log),
         web.route("*", "/v1/sessions/{id}/bar/{token}/{tail:.*}", proxy),
     ])
     application.on_startup.append(on_startup)

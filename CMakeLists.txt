@@ -309,7 +309,7 @@ if(EMSCRIPTEN)
     target_link_libraries(fsim PRIVATE m)
 else()
     set_target_properties(fsim PROPERTIES POSITION_INDEPENDENT_CODE OFF)
-    target_link_options(fsim PRIVATE -no-pie -Wl,--wrap=pthread_sigmask -Wl,--wrap=poll -Wl,--wrap=connect -Wl,--wrap=bind)
+    target_link_options(fsim PRIVATE -no-pie -Wl,--wrap=pthread_sigmask -Wl,--wrap=poll -Wl,--wrap=connect -Wl,--wrap=bind -Wl,--wrap=sendto)
     target_link_libraries(fsim PRIVATE pthread m)
 endif()
 # патченный port.c лежит в build — его локальные #include ищем рядом с оригиналом

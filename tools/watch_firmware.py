@@ -243,6 +243,11 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, pu
                                    f"fsim-runtime-recorder:{tag}"], capture_output=True, text=True)
         if contract.returncode != 0:
             raise RuntimeError(f"контракт fsim-recorder не прошёл:\n{contract.stdout[-1500:]}")
+        stage = "network-test"
+        network = subprocess.run([sys.executable, str(ROOT / "tools" / "test_network.py"), "--image",
+                                  f"fsim-runtime-recorder:{tag}"], capture_output=True, text=True)
+        if network.returncode != 0:
+            raise RuntimeError(f"сеть стенда (FS-8) не прошла проверку:\n{network.stdout[-1500:]}")
         stage = "stream-test"
         stream = subprocess.run([sys.executable, str(ROOT / "tools" / "test_stream.py"), "--image",
                                  f"fsim-runtime-stream:{tag}"], capture_output=True, text=True)
@@ -267,7 +272,7 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, pu
         # «Сломанным» коммит считаем, только если не собралась или не прошла смоук его сборка;
         # сбой доставки исходников (сеть, GitHub) повторится при следующем запуске
         state[target] = {**known, "status": "failed", "checked_at": time.time(),
-                         **({"failed_commit": info["commit"]} if stage in ("build", "recorder", "stream", "smoke", "recorder-test", "stream-test") else {})}
+                         **({"failed_commit": info["commit"]} if stage in ("build", "recorder", "stream", "smoke", "recorder-test", "network-test", "stream-test") else {})}
         path = alert(work, target, info, f"этап «{stage}»: {error}")
         print(f"[{target}] ПРОВАЛ на этапе {stage}, тревога: {path}", file=sys.stderr)
         return False

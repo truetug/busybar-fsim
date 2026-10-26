@@ -8,7 +8,8 @@ TAG="${1:-dev-current}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CTX="$(mktemp -d)"
 trap 'rm -rf "$CTX"' EXIT
-cp "$ROOT/recorder/Dockerfile" "$ROOT/recorder/server.py" "$ROOT/tools/frames_to_video.py" "$CTX/"
+cp "$ROOT/recorder/Dockerfile" "$ROOT/recorder/server.py" "$ROOT/tools/frames_to_video.py" "$ROOT/proxy/netproxy.py" "$CTX/"
+cp -R "$ROOT/recorder/net_app" "$CTX/net_app"
 PROXY=""
 [ -n "${FSIM_BUILD_PROXY:-}" ] && PROXY="--build-arg HTTP_PROXY=$FSIM_BUILD_PROXY --build-arg HTTPS_PROXY=$FSIM_BUILD_PROXY"
 # shellcheck disable=SC2086
