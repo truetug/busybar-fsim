@@ -144,14 +144,26 @@ uint32_t furi_hal_nvm_get_switch_pos(void) {
     return fsim_switch_pos;
 }
 
+/* Смещение часов прошивки относительно хоста: команда канала управления «time set / time offset»
+   (сценарий Clock должен показать смену минуты за 30 с видео). 64 бита, обновляется из потока канала. */
+static volatile int64_t fsim_clock_offset_ms;
+
+int64_t fsim_clock_get_offset_ms(void) {
+    return fsim_clock_offset_ms;
+}
+
+void fsim_clock_add_offset_ms(int64_t delta_ms) {
+    fsim_clock_offset_ms += delta_ms;
+}
+
 time_t furi_hal_rtc_get_timestamp(void) {
-    return time(NULL);
+    return (time_t)(furi_hal_rtc_get_timestamp_ms() / 1000);
 }
 
 time_t furi_hal_rtc_get_timestamp_ms(void) {
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
-    return (time_t)now.tv_sec * 1000 + now.tv_nsec / 1000000;
+    return (time_t)((int64_t)now.tv_sec * 1000 + now.tv_nsec / 1000000 + fsim_clock_offset_ms);
 }
 
 DateTimeMs furi_hal_rtc_get_datetime(void) {

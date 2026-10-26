@@ -8,14 +8,20 @@
      wheel <N>                              — колесо: N > 0 вверх, N < 0 вниз
      wait <мс>
      mark <метка>                           — строка «мс mark метка» в frames.log (таймлайн записи)
+     time set HH:MM:SS                      — часы прошивки: время суток в её часовом поясе (дата не меняется)
+     time offset ±N                         — сдвинуть часы прошивки на N секунд
    FSIM_INPUT="switch apps; wait 2000; short ok" — сценарий при старте.
    FSIM_CONTROL_PORT=<порт> — TCP на FSIM_CONTROL_HOST (по умолчанию 127.0.0.1), ответ ok / error. */
 #include <furi.h>
 #include <input/input.h>
+#include <time/time.h>
+#include <utz/utz.h>
+#include <datetime/datetime.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -62,9 +68,38 @@ static bool fsim_lookup(const FsimKeyName* names, size_t count, const char* name
     return false;
 }
 
+int64_t fsim_clock_get_offset_ms(void);
+void fsim_clock_add_offset_ms(int64_t delta_ms);
+
+/* Время суток в часовом поясе прошивки (то, что показывает Clock) и сдвиг на нужное */
+static bool fsim_clock_set_time_of_day(unsigned hours, unsigned minutes, unsigned seconds) {
+    if(hours > 23 || minutes > 59 || seconds > 59) {
+        return false;
+    }
+    Time* time_service = furi_record_open(RECORD_TIME);
+    TimeSettings settings;
+    time_get_settings(time_service, &settings);
+    furi_record_close(RECORD_TIME);
+
+    struct timespec real;
+    clock_gettime(CLOCK_REALTIME, &real);
+    int64_t now_ms = (int64_t)real.tv_sec * 1000 + real.tv_nsec / 1000000 + fsim_clock_get_offset_ms();
+    DateTimeMs date = datetime_timestamp_ms_to_datetime((time_t)now_ms);
+    utz_offset_t zone;
+    utz_get_current_offset(&settings.timezone, &date.dt, &zone);
+    int64_t zone_s = (int64_t)(zone.hours * 60 + zone.minutes) * 60;
+
+    int64_t local_s = now_ms / 1000 + zone_s;
+    int64_t time_of_day = ((local_s % 86400) + 86400) % 86400;
+    int64_t target = (int64_t)hours * 3600 + minutes * 60 + seconds;
+    fsim_clock_add_offset_ms((target - time_of_day) * 1000 - (now_ms % 1000));
+    return true;
+}
+
 static bool fsim_control_execute(Input* input, char* line) {
     char* command = strtok(line, " \t\r\n");
     char* argument = strtok(NULL, " \t\r\n");
+    char* value = strtok(NULL, " \t\r\n");
     if(!command) {
         return true;
     }
@@ -82,6 +117,20 @@ static bool fsim_control_execute(Input* input, char* line) {
         fprintf(log, "%lu mark %s\n", (unsigned long)furi_get_tick(), argument);
         fclose(log);
         return true;
+    }
+    if(strcasecmp(command, "time") == 0 && argument && value) {
+        unsigned hours, minutes, seconds;
+        char tail;
+        if(strcasecmp(argument, "set") == 0 &&
+           sscanf(value, "%2u:%2u:%2u%c", &hours, &minutes, &seconds, &tail) == 3) {
+            return fsim_clock_set_time_of_day(hours, minutes, seconds);
+        }
+        long offset;
+        if(strcasecmp(argument, "offset") == 0 && sscanf(value, "%ld%c", &offset, &tail) == 1) {
+            fsim_clock_add_offset_ms((int64_t)offset * 1000);
+            return true;
+        }
+        return false;
     }
     InputKey key;
     if(strcasecmp(command, "switch") == 0 && argument &&

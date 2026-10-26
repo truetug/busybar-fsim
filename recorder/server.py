@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -100,6 +101,13 @@ def parse_scenario(text: str) -> dict:
             bad(f"unknown action command: {command!r}")
         commands.append(command)
     scenario["commands"] = commands
+    clock = raw.get("clock")
+    if clock is not None:
+        # необязательное время суток («12:34:55») в часовом поясе бара: ставится перед запуском приложения
+        match = re.fullmatch(r"(\d{2}):(\d{2}):(\d{2})", clock) if isinstance(clock, str) else None
+        if not match or int(match[1]) > 23 or int(match[2]) > 59 or int(match[3]) > 59:
+            bad("clock must be HH:MM:SS")
+        scenario["clock"] = clock
     return scenario
 
 
@@ -204,12 +212,16 @@ class Fsim:
                                 str(payload.get("error") or f"firmware answered HTTP {error.code}")) from None
         return json.loads(data) if data.strip() else None
 
+    def control(self, command: str) -> None:
+        """Команда канала управления fsim (mark, time set …); отказ — ошибка прогона."""
+        with socket.create_connection(("127.0.0.1", CONTROL_PORT), timeout=5) as connection:
+            connection.sendall(f"{command}\n".encode())
+            if not connection.recv(16).startswith(b"ok"):
+                raise RuntimeError(f"fsim rejected control command: {command}")
+
     def mark(self, label: str) -> None:
         """Метка на таймлайне записи — по тем же часам, что и кадры."""
-        with socket.create_connection(("127.0.0.1", CONTROL_PORT), timeout=5) as connection:
-            connection.sendall(f"mark {label}\n".encode())
-            if not connection.recv(16).startswith(b"ok"):
-                raise RuntimeError(f"fsim rejected mark {label}")
+        self.control(f"mark {label}")
 
 
 def record(package: bytes, app_id: str, scenario: dict) -> tuple[bytes, str]:
@@ -227,6 +239,8 @@ def record(package: bytes, app_id: str, scenario: dict) -> tuple[bytes, str]:
         api_semver = fsim.call("GET", "version")["api_semver"]
         staged = fsim.call("POST", "apps/stage", body=package)
         fsim.call("POST", "apps/install", {"install_key": staged["install_key"]})
+        if scenario.get("clock"):
+            fsim.control(f"time set {scenario['clock']}")  # до запуска: приложение сразу видит нужное время
         fsim.call("POST", "apps/launch", {"app_id": app_id})
         fsim.mark("start")
         window = time.monotonic()

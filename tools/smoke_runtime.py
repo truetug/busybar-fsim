@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import socket
 import struct
 import subprocess
 import sys
@@ -88,7 +89,8 @@ def main():
 
     name = f"fsim-smoke-{uuid.uuid4().hex[:8]}"
     frames_dir = Path(subprocess.run(["mktemp", "-d"], capture_output=True, text=True).stdout.strip())
-    address, _ = start_container(args.image, name, frames_dir, "Europe/Moscow", 120)
+    address, control_address = start_container(args.image, name, frames_dir, "Europe/Moscow", 120)
+    control_host, control_port = control_address.rsplit(":", 1)
     base = f"http://{address}"
     try:
         started = time.monotonic()
@@ -106,6 +108,20 @@ def main():
         call(base, "POST", "apps/install", {"install_key": staged["install_key"]})
         names = [app["id"] for app in call(base, "GET", "apps/list")["apps"]]
         check("установка пакета (stage → install)", "app.fsim.smoke" in names)
+
+        def control(command: str) -> bool:
+            with socket.create_connection((control_host, int(control_port)), timeout=5) as connection:
+                connection.sendall(f"{command}\n".encode())
+                return connection.recv(16).startswith(b"ok")
+
+        # Часы прошивки: time set / time offset (сценарий Clock показывает смену минуты)
+        ok_set = control("time set 12:34:55")
+        stamp = call(base, "GET", "time")["timestamp"]
+        check("часы: time set 12:34:55", ok_set and "T12:34:5" in stamp, stamp)
+        control("time offset 10")
+        stamp = call(base, "GET", "time")["timestamp"]
+        check("часы: time offset +10 с переводит минуту", "T12:35:0" in stamp, stamp)
+        check("часы: плохое время отвергнуто", not control("time set 25:00:00"))
 
         seen: dict[str, bytes] = {}
         for key in ("busy", "custom", "settings", "off", "apps"):

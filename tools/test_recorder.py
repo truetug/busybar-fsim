@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from smoke_runtime import smoke_package  # noqa: E402
 
 PNG = b"\x89PNG\r\n\x1a\n"
-SCENARIO = {"duration_s": 10, "intro_delay_ms": 800, "action_pause_ms": 600, "capture_interval_ms": 100,
+SCENARIO = {"duration_s": 10, "clock": "12:34:55", "intro_delay_ms": 800, "action_pause_ms": 600, "capture_interval_ms": 100,
             "return_command": "back",
             "actions": [{"screen": "s", "label": "ok", "command": "ok", "effect": "e"},
                         {"screen": "s", "label": "back", "command": "back", "effect": "e"}]}
@@ -118,6 +118,9 @@ def main():
         status, _, body = post(base, {"package": package, "scenario": json.dumps({**SCENARIO, "actions": [
             {"screen": "s", "label": "l", "command": "explode", "effect": "e"}]}).encode()})
         check("400 scenario_invalid (команда)", status == 400 and b"scenario_invalid" in body, f"{status}")
+
+        status, _, body = post(base, {"package": package, "scenario": json.dumps({**SCENARIO, "clock": "25:61:00"}).encode()})
+        check("400 scenario_invalid (clock)", status == 400 and b"scenario_invalid" in body, f"{status}")
 
         # Пакет с манифестом, но без значимых файлов: прошивка отказывает при stage
         broken = io.BytesIO()
