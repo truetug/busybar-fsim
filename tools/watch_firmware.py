@@ -197,7 +197,14 @@ def publish(prefix: str, target: str, tag: str) -> None:
         for suffix in dict.fromkeys(suffixes):
             remote = f"{prefix.rstrip('/')}/{repository}:{suffix}"
             run(["docker", "tag", f"{repository}:{tag}", remote])
-            run(["docker", "push", remote])
+            for attempt in range(1, 4):  # GHCR изредка отвечает «unknown blob» на кросс-репозиторный слой
+                try:
+                    run(["docker", "push", remote])
+                    break
+                except RuntimeError:
+                    if attempt == 3:
+                        raise
+                    time.sleep(10 * attempt)
             print(f"[{target}] опубликован {remote}")
 
 
@@ -207,7 +214,8 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, pu
     print(f"[{target}] CI: {info['build']} @ {info['commit']}; состояние: {known.get('commit')} {known.get('status')}")
     if dry_run:
         return True
-    if known.get("commit") == info["commit"] and not force:
+    # Обработанным считаем только успешный проход: после сбоя публикации или сети коммит пробуем снова
+    if known.get("commit") == info["commit"] and known.get("status") == "ok" and not force:
         print(f"[{target}] без изменений")
         return True
     stage = "sync"
