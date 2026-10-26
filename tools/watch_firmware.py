@@ -237,22 +237,22 @@ def process(work: Path, target: str, state: dict, force: bool, dry_run: bool, pu
         smoke = subprocess.run([sys.executable, str(ROOT / "tools" / "smoke_runtime.py"), image, "--report", str(report)],
                                capture_output=True, text=True)
         if smoke.returncode != 0:
-            raise RuntimeError(f"смоук не прошёл (отчёт {report}):\n{smoke.stdout[-1500:]}")
+            raise RuntimeError(f"смоук не прошёл (отчёт {report}):\n{smoke.stdout[-6000:]}")
         stage = "recorder-test"
         contract = subprocess.run([sys.executable, str(ROOT / "tools" / "test_recorder.py"), "--image",
                                    f"fsim-runtime-recorder:{tag}"], capture_output=True, text=True)
         if contract.returncode != 0:
-            raise RuntimeError(f"контракт fsim-recorder не прошёл:\n{contract.stdout[-1500:]}")
+            raise RuntimeError(f"контракт fsim-recorder не прошёл:\n{contract.stdout[-6000:]}")
         stage = "network-test"
         network = subprocess.run([sys.executable, str(ROOT / "tools" / "test_network.py"), "--image",
                                   f"fsim-runtime-recorder:{tag}"], capture_output=True, text=True)
         if network.returncode != 0:
-            raise RuntimeError(f"сеть стенда (FS-8) не прошла проверку:\n{network.stdout[-1500:]}")
+            raise RuntimeError(f"сеть стенда (FS-8) не прошла проверку:\n{network.stdout[-6000:]}")
         stage = "stream-test"
         stream = subprocess.run([sys.executable, str(ROOT / "tools" / "test_stream.py"), "--image",
                                  f"fsim-runtime-stream:{tag}"], capture_output=True, text=True)
         if stream.returncode != 0:
-            raise RuntimeError(f"контракт fsim-stream не прошёл:\n{stream.stdout[-1500:]}")
+            raise RuntimeError(f"контракт fsim-stream не прошёл:\n{stream.stdout[-6000:]}")
         run(["docker", "tag", image, f"fsim-runtime:{target}-current"])
         run(["docker", "tag", f"fsim-runtime-recorder:{tag}", f"fsim-runtime-recorder:{target}-current"])
         run(["docker", "tag", f"fsim-runtime-stream:{tag}", f"fsim-runtime-stream:{target}-current"])
