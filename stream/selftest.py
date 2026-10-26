@@ -40,12 +40,21 @@ def icon_png(size: int = 8) -> bytes:
             + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
 
 
+def _plain(info):
+    """Пакет для прошивки: USTAR без PAX-заголовков (распаковщик tar в прошивке их не понимает — файлы пропадают);
+    время — целое, владелец — root."""
+    info.mtime = int(info.mtime)
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
+
+
 def smoke_package(root: Path = SMOKE) -> bytes:
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         for path in sorted(root.rglob("*")):
             if path.is_file():
-                archive.add(path, arcname=f"{root.name}/{path.relative_to(root)}", recursive=False)
+                archive.add(path, arcname=f"{root.name}/{path.relative_to(root)}", recursive=False, filter=_plain)
         icon = icon_png()
         info = tarfile.TarInfo(f"{root.name}/appmeta/icon_front_8x8.png")
         info.size = len(icon)

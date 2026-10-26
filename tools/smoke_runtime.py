@@ -44,13 +44,22 @@ def icon_png(size: int = 8) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
+def _plain(info):
+    """Пакет для прошивки: USTAR без PAX-заголовков (распаковщик tar в прошивке их не понимает — файлы пропадают);
+    время — целое, владелец — root."""
+    info.mtime = int(info.mtime)
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
+
+
 def smoke_package() -> bytes:
     """tar пакета приложения через tarfile (системный tar на macOS добавляет ._*)."""
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         for path in sorted(SMOKE_APP.rglob("*")):
             if path.is_file():
-                archive.add(path, arcname=f"{SMOKE_APP.name}/{path.relative_to(SMOKE_APP)}", recursive=False)
+                archive.add(path, arcname=f"{SMOKE_APP.name}/{path.relative_to(SMOKE_APP)}", recursive=False, filter=_plain)
         icon = icon_png()
         info = tarfile.TarInfo(f"{SMOKE_APP.name}/appmeta/icon_front_8x8.png")
         info.size = len(icon)

@@ -117,6 +117,31 @@ def parse_scenario(text: str) -> dict:
     return scenario
 
 
+def has_pax_headers(data: bytes) -> bool:
+    """В tar есть расширенные заголовки PAX (typeflag x / g). Распаковщик tar в прошивке их не понимает: файлы
+    пропускаются, и установка заканчивается загадочным «Wrong app manifest». Проверяем сырые заголовки."""
+    import gzip
+
+    if data[:2] == b"\x1f\x8b":  # прошивка сама определяет сжатие
+        try:
+            data = gzip.GzipFile(fileobj=io.BytesIO(data)).read(MAX_PACKAGE_BYTES * 4)
+        except OSError:
+            return False
+    offset = 0
+    while offset + 512 <= len(data):
+        header = data[offset:offset + 512]
+        if header == b"\0" * 512:
+            break
+        if header[156:157] in (b"x", b"g"):
+            return True
+        try:
+            size = int(header[124:135].rstrip(b"\0 ") or b"0", 8)
+        except ValueError:
+            return False
+        offset += 512 + ((size + 511) // 512) * 512
+    return False
+
+
 def parse_package(data: bytes) -> str:
     """id приложения из appmeta/manifest.json; пакет должен быть читаемым tar (в т.ч. сжатым)."""
     def bad(message: str):
@@ -126,6 +151,9 @@ def parse_package(data: bytes) -> str:
         bad("package is empty")
     if len(data) > MAX_PACKAGE_BYTES:
         bad("package is too large")
+    if has_pax_headers(data):
+        bad("tar contains PAX extended headers, which the firmware cannot unpack (files are skipped); "
+            "build the archive in USTAR or GNU format")
     try:
         with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as archive:
             for member in archive:

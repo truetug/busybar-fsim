@@ -52,12 +52,21 @@ class Origin(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body)
 
 
+def _plain(info):
+    """Пакет для прошивки: USTAR без PAX-заголовков (распаковщик tar в прошивке их не понимает — файлы пропадают);
+    время — целое, владелец — root."""
+    info.mtime = int(info.mtime)
+    info.uid = info.gid = 0
+    info.uname = info.gname = ""
+    return info
+
+
 def package() -> bytes:
     buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
+    with tarfile.open(fileobj=buffer, mode="w", format=tarfile.USTAR_FORMAT) as archive:
         for path in sorted(APP.rglob("*")):
             if path.is_file():
-                archive.add(path, arcname=f"{APP.name}/{path.relative_to(APP)}", recursive=False)
+                archive.add(path, arcname=f"{APP.name}/{path.relative_to(APP)}", recursive=False, filter=_plain)
     return buffer.getvalue()
 
 

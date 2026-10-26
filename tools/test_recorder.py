@@ -113,6 +113,17 @@ def main():
         scenario = json.dumps(SCENARIO).encode()
         status, _, body = post(base, {"package": b"not a tar", "scenario": scenario})
         check("400 package_invalid", status == 400 and b"package_invalid" in body, f"{status}")
+        pax = io.BytesIO()
+        with tarfile.open(fileobj=pax, mode="w", format=tarfile.PAX_FORMAT) as archive:  # имя не ASCII → заголовок PAX
+            data = b"{}"
+            info = tarfile.TarInfo("app.fsim.pax/appmeta/manifest.json")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+            info = tarfile.TarInfo("app.fsim.pax/файл.txt")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+        status, _, body = post(base, {"package": pax.getvalue(), "scenario": scenario})
+        check("400 package_invalid: PAX-заголовки в tar", status == 400 and b"PAX" in body and b"package_invalid" in body, f"{status}")
         status, _, body = post(base, {"package": package, "scenario": b'{"duration_s": 99, "actions": []}'})
         check("400 scenario_invalid", status == 400 and b"scenario_invalid" in body, f"{status}")
         status, _, body = post(base, {"package": package, "scenario": json.dumps({**SCENARIO, "actions": [
